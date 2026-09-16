@@ -140,6 +140,17 @@ export function useItemsDB() {
     return item
   }
 
+  // Importa un item preservando todos sus campos.
+  // Genera un id nuevo para evitar colisiones en modo merge.
+  const importItem = async (item: ShoppingItem): Promise<ShoppingItem> => {
+    const newItem: ShoppingItem = {
+      ...item,
+      id: uuidv4(),
+    }
+    await db.items.add(newItem)
+    return newItem
+  }
+
   const update = async (id: string, updates: Partial<ShoppingItem>): Promise<void> => {
     await db.items.update(id, updates)
   }
@@ -185,6 +196,7 @@ export function useItemsDB() {
     getByListId,
     getById,
     create,
+    importItem,
     update,
     toggleComplete,
     remove,

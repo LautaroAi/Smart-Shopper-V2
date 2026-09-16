@@ -166,6 +166,23 @@ export const useItemsStore = defineStore('items', () => {
     }
   }
 
+  const importItem = async (item: ShoppingItem) => {
+    loading.value = true
+    error.value = null
+    try {
+      const newItem = await itemsDB.importItem(item)
+      const listItems = items.value.get(newItem.listId) || []
+      items.value.set(newItem.listId, [...listItems, newItem])
+      return newItem
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to import item'
+      console.error('Failed to import item:', e)
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     // State
     items,
@@ -178,6 +195,7 @@ export const useItemsStore = defineStore('items', () => {
     // Actions
     loadItems,
     createItem,
+    importItem,
     updateItem,
     toggleItemComplete,
     deleteItem,

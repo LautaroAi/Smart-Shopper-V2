@@ -205,18 +205,13 @@ export function useBackup() {
         await listsStore.archiveList(newList.id)
       }
 
-      // Restore items for this list
+      // Restore items for this list, preserving all fields
       const listItems = backupData.items.filter((item) => item.listId === list.id)
       for (const item of listItems) {
-        const newItem = await itemsStore.createItem(newList.id, item.name, item.category)
-
-        // Restore item properties
-        if (item.completed) {
-          await itemsStore.toggleItemComplete(newList.id, newItem.id)
-        }
-
-        // Note: We can't restore exact timestamps or IDs as they're auto-generated
-        // But the important data (name, category, completed state) is preserved
+        await itemsStore.importItem({
+          ...item,
+          listId: newList.id, // remapear al nuevo listId
+        })
       }
     }
 
