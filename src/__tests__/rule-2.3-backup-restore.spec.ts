@@ -1,143 +1,294 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useBackup } from '@/composables/useBackup'
 import { useListsStore } from '@/stores/lists'
 import { useItemsStore } from '@/stores/items'
-import type { BackupData } from '@/composables/useBackup'
+import { useProductsStore } from '@/stores/products'
+import { useCategoriesStore } from '@/stores/categories'
+import { useBackup } from '@/composables/useBackup'
+import { useItemsDB } from '@/composables/useDB'
 
 describe('Rule 2.3: Local backup and restore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
   })
 
-  describe('Backup Export', () => {
-    it('should export lists to backup data', async () => {
+  describe('Export backup', () => {
+    it('should export all lists and items', async () => {
       const listsStore = useListsStore()
       const itemsStore = useItemsStore()
-      const backup = useBackup()
+      const { exportBackup } = useBackup()
 
-      await listsStore.loadLists()
-
-      // Create a list with items
-      const list = await listsStore.createList('Grocery List')
+      const list = await listsStore.createList('Weekly')
       await itemsStore.createItem(list.id, 'Milk', 'dairy')
       await itemsStore.createItem(list.id, 'Bread', 'bakery')
 
-      // Export backup
-      const backupData = await backup.exportBackup()
+      const backup = await exportBackup()
 
-      expect(backupData).toBeDefined()
-      expect(backupData.version).toBeDefined()
-      expect(backupData.timestamp).toBeGreaterThan(0)
-      expect(backupData.lists).toBeDefined()
-      expect(backupData.items).toBeDefined()
-      expect(Array.isArray(backupData.lists)).toBe(true)
-      expect(Array.isArray(backupData.items)).toBe(true)
+      expect(backup.version).toBe('1.0.0')
+      expect(backup.lists).toHaveLength(1)
+      expect(backup.items).toHaveLength(2)
+      expect(backup.timestamp).toBeTypeOf('number')
     })
 
-    it('should include all items in backup', async () => {
-      const listsStore = useListsStore()
-      const itemsStore = useItemsStore()
-      const backup = useBackup()
+    it('should export products and custom categories', async () => {
+      const productsStore = useProductsStore()
+      const categoriesStore = useCategoriesStore()
+      const { exportBackup } = useBackup()
 
-      await listsStore.loadLists()
+      await productsStore.saveProduct({
+        barcode: '123456',
+        name: 'Test Product',
+        category: 'pantry',
+      })
+      await categoriesStore.createCategory('Pets', '🐾')
 
-      const list = await listsStore.createList('Test List')
-      await itemsStore.createItem(list.id, 'Item 1', 'other')
-      await itemsStore.createItem(list.id, 'Item 2', 'other')
-      await itemsStore.createItem(list.id, 'Item 3', 'other')
+      const backup = await exportBackup()
 
-      const backupData = await backup.exportBackup()
-
-      const exportedList = backupData.lists.find((l) => l.id === list.id)
-      expect(exportedList).toBeDefined()
-
-      const exportedItems = backupData.items.filter((i) => i.listId === list.id)
-      expect(exportedItems).toHaveLength(3)
+      expect(backup.products).toHaveLength(1)
+      expect(backup.products[0]?.barcode).toBe('123456')
+      expect(backup.customCategories.length).toBeGreaterThanOrEqual(1)
     })
 
-    it('should preserve item categories in backup', async () => {
+    it('should include archived lists in backup', async () => {
       const listsStore = useListsStore()
-      const itemsStore = useItemsStore()
-      const backup = useBackup()
+      const { exportBackup } = useBackup()
 
-      await listsStore.loadLists()
+      const list = await listsStore.createList('Old')
+      await listsStore.archiveList(list.id)
 
-      const list = await listsStore.createList('Category Test')
-      await itemsStore.createItem(list.id, 'Milk', 'dairy')
-      await itemsStore.createItem(list.id, 'Apples', 'produce')
-      await itemsStore.createItem(list.id, 'Bread', 'bakery')
+      const backup = await exportBackup()
 
-      const backupData = await backup.exportBackup()
-
-      const items = backupData.items.filter((i) => i.listId === list.id)
-      expect(items.find((i) => i.name === 'Milk')?.category).toBe('dairy')
-      expect(items.find((i) => i.name === 'Apples')?.category).toBe('produce')
-      expect(items.find((i) => i.name === 'Bread')?.category).toBe('bakery')
-    })
-
-    it('should preserve completed state in backup', async () => {
-      const listsStore = useListsStore()
-      const itemsStore = useItemsStore()
-      const backup = useBackup()
-
-      await listsStore.loadLists()
-
-      const list = await listsStore.createList('Completion Test')
-      const item1 = await itemsStore.createItem(list.id, 'Completed Item', 'other')
-      const item2 = await itemsStore.createItem(list.id, 'Incomplete Item', 'other')
-
-      // Mark one as completed
-      await itemsStore.updateItem(list.id, item1.id, { completed: true })
-      await itemsStore.loadItems(list.id)
-
-      const backupData = await backup.exportBackup()
-
-      const items = backupData.items.filter((i) => i.listId === list.id)
-      expect(items.find((i) => i.id === item1.id)?.completed).toBe(true)
-      expect(items.find((i) => i.id === item2.id)?.completed).toBe(false)
+      expect(backup.lists).toHaveLength(1)
+      expect(backup.lists[0]?.archived).toBe(true)
     })
   })
 
-  describe('Backup Validation', () => {
-    it('should validate correct backup data', () => {
-      const backup = useBackup()
+  describe('Import backup - basic restore', () => {
+    it('should restore lists and items', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const { exportBackup, importBackup } = useBackup()
 
-      const validBackup: BackupData = {
-        version: '1.0.0',
-        timestamp: Date.now(),
-        lists: [],
-        items: [],
-        customCategories: [],
-        products: [],
-        categoryPreferences: {},
-        categoryOrder: [],
-      }
+      const list = await listsStore.createList('Weekly')
+      await itemsStore.createItem(list.id, 'Milk', 'dairy')
+      await itemsStore.createItem(list.id, 'Bread', 'bakery')
 
-      const result = backup.validateBackup(validBackup)
-      expect(result.valid).toBe(true)
-      expect(result.errors).toHaveLength(0)
+      const backup = await exportBackup()
+
+      // Wipe everything
+      await listsStore.deleteList(list.id)
+
+      await importBackup(backup)
+
+      await listsStore.loadLists()
+      expect(listsStore.lists).toHaveLength(1)
+      expect(listsStore.lists[0]?.name).toBe('Weekly')
+
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const items = itemsStore.getItemsByListId(restoredListId).value
+
+      expect(items).toHaveLength(2)
+      expect(items.map((i) => i.name).sort()).toEqual(['Bread', 'Milk'])
     })
 
-    it('should reject invalid backup data', () => {
-      const backup = useBackup()
+    it('should restore archived state on lists', async () => {
+      const listsStore = useListsStore()
+      const { exportBackup, importBackup } = useBackup()
 
-      const invalidBackup = {
-        // Missing required fields
-        version: '1.0.0',
-        // No timestamp, lists, items, etc.
+      const list = await listsStore.createList('Old')
+      await listsStore.archiveList(list.id)
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+
+      await importBackup(backup)
+      await listsStore.loadLists()
+
+      expect(listsStore.lists).toHaveLength(1)
+      expect(listsStore.lists[0]?.archived).toBe(true)
+    })
+
+    it('should throw on invalid backup data', async () => {
+      const { importBackup } = useBackup()
+
+      await expect(
+        importBackup({ foo: 'bar' } as unknown as Parameters<typeof importBackup>[0]),
+      ).rejects.toThrow(/Invalid backup/i)
+    })
+  })
+
+  // Item restoration must preserve ALL fields
+  describe('Item data preservation (regression for bug 3)', () => {
+    it('should preserve quantity and unit on restore', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      await itemsStore.createItem(list.id, 'Milk', 'dairy', 3, 'bottle')
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await importBackup(backup)
+
+      await listsStore.loadLists()
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const item = itemsStore.getItemsByListId(restoredListId).value[0]!
+
+      expect(item.quantity).toBe(3)
+      expect(item.unit).toBe('bottle')
+    })
+
+    it('should preserve notes and barcode on restore', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const itemsDB = useItemsDB()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      const created = await itemsStore.createItem(list.id, 'Milk', 'dairy')
+      await itemsDB.update(created.id, {
+        notes: 'sin lactosa',
+        barcode: '8412345678901',
+      })
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await importBackup(backup)
+
+      await listsStore.loadLists()
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const item = itemsStore.getItemsByListId(restoredListId).value[0]!
+
+      expect(item.notes).toBe('sin lactosa')
+      expect(item.barcode).toBe('8412345678901')
+    })
+
+    it('should preserve completed state and completedAt on restore', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      const item = await itemsStore.createItem(list.id, 'Milk', 'dairy')
+      await itemsStore.toggleItemComplete(list.id, item.id)
+
+      const completedAtBefore = itemsStore.getItemsByListId(list.id).value[0]!.completedAt
+      expect(completedAtBefore).toBeTypeOf('number')
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await importBackup(backup)
+
+      await listsStore.loadLists()
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const restored = itemsStore.getItemsByListId(restoredListId).value[0]!
+
+      expect(restored.completed).toBe(true)
+      expect(restored.completedAt).toBe(completedAtBefore)
+    })
+
+    it('should preserve addedAt timestamp on restore', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      await itemsStore.createItem(list.id, 'Milk', 'dairy')
+
+      const addedAtBefore = itemsStore.getItemsByListId(list.id).value[0]!.addedAt
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await importBackup(backup)
+
+      await listsStore.loadLists()
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const restored = itemsStore.getItemsByListId(restoredListId).value[0]!
+
+      expect(restored.addedAt).toBe(addedAtBefore)
+    })
+
+    it('should preserve every field across multiple items', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const itemsDB = useItemsDB()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+
+      const milk = await itemsStore.createItem(list.id, 'Milk', 'dairy', 2, 'bottle')
+      const bread = await itemsStore.createItem(list.id, 'Bread', 'bakery', 1)
+      await itemsDB.update(milk.id, { notes: 'semi', barcode: '111' })
+      await itemsDB.update(bread.id, { notes: 'integral', barcode: '222' })
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await importBackup(backup)
+
+      await listsStore.loadLists()
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const restored = itemsStore.getItemsByListId(restoredListId).value
+
+      const rMilk = restored.find((i) => i.name === 'Milk')!
+      const rBread = restored.find((i) => i.name === 'Bread')!
+
+      expect(rMilk.quantity).toBe(2)
+      expect(rMilk.unit).toBe('bottle')
+      expect(rMilk.notes).toBe('semi')
+      expect(rMilk.barcode).toBe('111')
+
+      expect(rBread.quantity).toBe(1)
+      expect(rBread.notes).toBe('integral')
+      expect(rBread.barcode).toBe('222')
+    })
+
+    it('should not reuse the original item ids (safe for merge)', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      await itemsStore.createItem(list.id, 'Milk', 'dairy')
+
+      const originalIds = itemsStore.getItemsByListId(list.id).value.map((i) => i.id)
+
+      const backup = await exportBackup()
+      await importBackup(backup, { merge: true })
+
+      await listsStore.loadLists()
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const restoredIds = itemsStore.getItemsByListId(restoredListId).value.map((i) => i.id)
+
+      // The two item sets must not collide
+      for (const id of restoredIds) {
+        expect(originalIds).not.toContain(id)
       }
+    })
+  })
 
-      const result = backup.validateBackup(invalidBackup)
+  describe('Backup validation', () => {
+    it('should reject invalid backup data', () => {
+      const { validateBackup } = useBackup()
+
+      const result = validateBackup({ foo: 'bar' })
+
       expect(result.valid).toBe(false)
       expect(result.errors.length).toBeGreaterThan(0)
     })
 
     it('should reject incompatible backup versions', () => {
-      const backup = useBackup()
+      const { validateBackup } = useBackup()
 
-      const incompatibleBackup: BackupData = {
-        version: '2.0.0', // Future version
+      const result = validateBackup({
+        version: '2.0.0',
         timestamp: Date.now(),
         lists: [],
         items: [],
@@ -145,122 +296,57 @@ describe('Rule 2.3: Local backup and restore', () => {
         products: [],
         categoryPreferences: {},
         categoryOrder: [],
-      }
+      })
 
-      const result = backup.validateBackup(incompatibleBackup)
       expect(result.valid).toBe(false)
       expect(result.errors.some((e) => e.includes('Incompatible'))).toBe(true)
     })
 
-    it('should validate required fields', () => {
-      const backup = useBackup()
+    it('should accept a valid backup object', async () => {
+      const listsStore = useListsStore()
+      const { exportBackup, validateBackup } = useBackup()
+      await listsStore.createList('Test')
 
-      const result = backup.validateBackup(null)
-      expect(result.valid).toBe(false)
-      expect(result.errors.some((e) => e.includes('must be an object'))).toBe(true)
+      const backup = await exportBackup()
+      const result = validateBackup(backup)
+
+      expect(result.valid).toBe(true)
+      expect(result.errors).toHaveLength(0)
     })
   })
 
-  describe('Backup Restore', () => {
-    it('should restore lists from backup', async () => {
+  describe('Merge vs replace mode', () => {
+    it('should replace existing data when merge is false', async () => {
       const listsStore = useListsStore()
-      const itemsStore = useItemsStore()
-      const backup = useBackup()
+      const { exportBackup, importBackup } = useBackup()
 
+      await listsStore.createList('Original')
+      const backup = await exportBackup()
+
+      await listsStore.createList('Extra')
+      expect(listsStore.lists).toHaveLength(2)
+
+      await importBackup(backup, { merge: false })
       await listsStore.loadLists()
 
-      // Create original data
-      const originalList = await listsStore.createList('Original List')
-      await itemsStore.createItem(originalList.id, 'Original Item', 'other')
-
-      // Export backup
-      const backupData = await backup.exportBackup()
-
-      // Clear data
-      await listsStore.deleteList(originalList.id)
-      await listsStore.loadLists()
-      expect(listsStore.lists).toHaveLength(0)
-
-      // Restore from backup
-      await backup.importBackup(backupData)
-
-      // Verify restoration
-      await listsStore.loadLists()
-      expect(listsStore.lists.length).toBeGreaterThan(0)
-
-      const restoredList = listsStore.lists.find((l) => l.name === 'Original List')
-      expect(restoredList).toBeDefined()
+      expect(listsStore.lists).toHaveLength(1)
+      expect(listsStore.lists[0]?.name).toBe('Original')
     })
 
-    it('should restore items with categories', async () => {
+    it('should keep existing data when merge is true', async () => {
       const listsStore = useListsStore()
-      const itemsStore = useItemsStore()
-      const backup = useBackup()
+      const { exportBackup, importBackup } = useBackup()
 
+      await listsStore.createList('Original')
+      const backup = await exportBackup()
+
+      await listsStore.createList('Extra')
+      await importBackup(backup, { merge: true })
       await listsStore.loadLists()
 
-      // Create list with categorized items
-      const list = await listsStore.createList('Categorized List')
-      await itemsStore.createItem(list.id, 'Milk', 'dairy')
-      await itemsStore.createItem(list.id, 'Bread', 'bakery')
-
-      // Export backup
-      const backupData = await backup.exportBackup()
-
-      // Clear and restore
-      await listsStore.deleteList(list.id)
-      await backup.importBackup(backupData)
-
-      // Verify items were restored with categories
-      await listsStore.loadLists()
-      const restoredList = listsStore.lists.find((l) => l.name === 'Categorized List')
-      expect(restoredList).toBeDefined()
-
-      await itemsStore.loadItems(restoredList!.id)
-      const items = itemsStore.getItemsByListId(restoredList!.id).value
-
-      expect(items.find((i) => i.name === 'Milk')?.category).toBe('dairy')
-      expect(items.find((i) => i.name === 'Bread')?.category).toBe('bakery')
-    })
-
-    it('should restore completed state of items', async () => {
-      const listsStore = useListsStore()
-      const itemsStore = useItemsStore()
-      const backup = useBackup()
-
-      await listsStore.loadLists()
-
-      // Create list with completed item
-      const list = await listsStore.createList('Completion List')
-      const item = await itemsStore.createItem(list.id, 'Completed Item', 'other')
-      await itemsStore.updateItem(list.id, item.id, { completed: true })
-
-      // Export, clear, restore
-      const backupData = await backup.exportBackup()
-      await listsStore.deleteList(list.id)
-      await backup.importBackup(backupData)
-
-      // Verify completed state
-      await listsStore.loadLists()
-      const restoredList = listsStore.lists.find((l) => l.name === 'Completion List')
-
-      await itemsStore.loadItems(restoredList!.id)
-      const items = itemsStore.getItemsByListId(restoredList!.id).value
-
-      expect(items).toHaveLength(1)
-      expect(items[0]?.completed).toBe(true)
-    })
-
-    it('should handle restore errors gracefully', async () => {
-      const backup = useBackup()
-
-      const invalidBackup = {
-        version: '1.0.0',
-        timestamp: Date.now(),
-        // Missing required arrays
-      } as unknown as BackupData
-
-      await expect(backup.importBackup(invalidBackup)).rejects.toThrow()
+      const names = listsStore.lists.map((l) => l.name)
+      expect(names).toContain('Original')
+      expect(names).toContain('Extra')
     })
   })
 })
