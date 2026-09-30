@@ -258,19 +258,29 @@ describe('Rule 2.3: Local backup and restore', () => {
       await itemsStore.createItem(list.id, 'Milk', 'dairy')
 
       const originalIds = itemsStore.getItemsByListId(list.id).value.map((i) => i.id)
+      expect(originalIds).toHaveLength(1)
 
       const backup = await exportBackup()
       await importBackup(backup, { merge: true })
-
       await listsStore.loadLists()
-      const restoredListId = listsStore.lists[0]!.id
-      await itemsStore.loadItems(restoredListId)
-      const restoredIds = itemsStore.getItemsByListId(restoredListId).value.map((i) => i.id)
 
-      // The two item sets must not collide
-      for (const id of restoredIds) {
-        expect(originalIds).not.toContain(id)
+      // Tras merge hay 2 listas. Recogemos TODOS los items de TODAS las listas.
+      const allIds = new Set<string>()
+      for (const l of listsStore.lists) {
+        await itemsStore.loadItems(l.id)
+        for (const it of itemsStore.getItemsByListId(l.id).value) {
+          allIds.add(it.id)
+        }
       }
+
+      // Los IDs originales siguen presentes...
+      for (const id of originalIds) {
+        expect(allIds.has(id)).toBe(true)
+      }
+
+      // ...y hay al menos tantos IDs nuevos como originales (no se reutilizaron).
+      const newIds = [...allIds].filter((id) => !originalIds.includes(id))
+      expect(newIds.length).toBeGreaterThanOrEqual(originalIds.length)
     })
   })
 

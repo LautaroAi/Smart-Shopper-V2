@@ -68,7 +68,7 @@ export function useBackup() {
       console.error('Failed to load category order:', error)
     }
 
-    return {
+    const payload: BackupData = {
       version: '1.0.0',
       timestamp: Date.now(),
       lists: listsStore.lists,
@@ -78,6 +78,12 @@ export function useBackup() {
       categoryPreferences,
       categoryOrder,
     }
+
+    // Los stores de Pinia devuelven Proxies reactivos.
+    // structuredClone (usado por IndexedDB) no los puede clonar y
+    // se queda colgado en fake-indexeddb. Este round-trip deja
+    // objetos planos clonables.
+    return JSON.parse(JSON.stringify(payload)) as BackupData
   }
 
   /**
@@ -209,7 +215,7 @@ export function useBackup() {
       const listItems = backupData.items.filter((item) => item.listId === list.id)
       for (const item of listItems) {
         await itemsStore.importItem({
-          ...item,
+          ...JSON.parse(JSON.stringify(item)),
           listId: newList.id, // remapear al nuevo listId
         })
       }
