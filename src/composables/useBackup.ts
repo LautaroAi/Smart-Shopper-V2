@@ -1,3 +1,5 @@
+import { db } from '@/db'
+import { usePreferencesStore } from '@/stores/preferences'
 import { useListsStore } from '@/stores/lists'
 import { useItemsStore } from '@/stores/items'
 import { useCategoriesStore } from '@/stores/categories'
@@ -24,6 +26,7 @@ export interface BackupValidationResult {
  * Composable for backing up and restoring application data
  */
 export function useBackup() {
+  const preferencesStore = usePreferencesStore()
   const listsStore = useListsStore()
   const itemsStore = useItemsStore()
   const categoriesStore = useCategoriesStore()
@@ -47,14 +50,10 @@ export function useBackup() {
     }
 
     // Get category preferences from localStorage
+    const prefsArray = await db.categoryPreferences.toArray()
     const categoryPreferences: Record<string, string> = {}
-    try {
-      const stored = localStorage.getItem('categoryPreferences')
-      if (stored) {
-        Object.assign(categoryPreferences, JSON.parse(stored))
-      }
-    } catch (error) {
-      console.error('Failed to load category preferences:', error)
+    for (const pref of prefsArray) {
+      categoryPreferences[pref.itemName] = pref.category
     }
 
     // Get category order from localStorage
@@ -186,6 +185,9 @@ export function useBackup() {
       for (const id of categoryIds) {
         await categoriesStore.deleteCategory(id)
       }
+
+      // Clear preferences
+      await preferencesStore.clearAll()
     }
 
     // Restore custom categories first (they're referenced by items)
@@ -223,10 +225,9 @@ export function useBackup() {
 
     // Restore category preferences to localStorage
     if (backupData.categoryPreferences) {
-      try {
-        localStorage.setItem('categoryPreferences', JSON.stringify(backupData.categoryPreferences))
-      } catch (error) {
-        console.error('Failed to restore category preferences:', error)
+      const entries = Object.entries(backupData.categoryPreferences)
+      for (const [itemName, category] of entries) {
+        await preferencesStore.savePreference(itemName, category)
       }
     }
 
@@ -243,6 +244,7 @@ export function useBackup() {
     await listsStore.loadLists()
     await productsStore.loadProducts()
     await categoriesStore.loadCustomCategories()
+    await preferencesStore.loadPreferences()
   }
 
   /**
