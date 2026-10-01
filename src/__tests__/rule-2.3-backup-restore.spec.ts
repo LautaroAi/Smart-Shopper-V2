@@ -4,6 +4,7 @@ import { useListsStore } from '@/stores/lists'
 import { useItemsStore } from '@/stores/items'
 import { useProductsStore } from '@/stores/products'
 import { useCategoriesStore } from '@/stores/categories'
+import { usePreferencesStore } from '@/stores/preferences'
 import { useBackup } from '@/composables/useBackup'
 import { useItemsDB } from '@/composables/useDB'
 
@@ -119,7 +120,7 @@ describe('Rule 2.3: Local backup and restore', () => {
   })
 
   // Item restoration must preserve ALL fields
-  describe('Item data preservation (regression for bug 3)', () => {
+  describe('Item data preservation (regression for bug 1)', () => {
     it('should preserve quantity and unit on restore', async () => {
       const listsStore = useListsStore()
       const itemsStore = useItemsStore()
@@ -258,19 +259,93 @@ describe('Rule 2.3: Local backup and restore', () => {
       await itemsStore.createItem(list.id, 'Milk', 'dairy')
 
       const originalIds = itemsStore.getItemsByListId(list.id).value.map((i) => i.id)
+      expect(originalIds).toHaveLength(1)
 
       const backup = await exportBackup()
       await importBackup(backup, { merge: true })
-
       await listsStore.loadLists()
-      const restoredListId = listsStore.lists[0]!.id
-      await itemsStore.loadItems(restoredListId)
-      const restoredIds = itemsStore.getItemsByListId(restoredListId).value.map((i) => i.id)
 
-      // The two item sets must not collide
-      for (const id of restoredIds) {
-        expect(originalIds).not.toContain(id)
+      // Tras merge hay 2 listas. Recogemos TODOS los items de TODAS las listas.
+      const allIds = new Set<string>()
+      for (const l of listsStore.lists) {
+        await itemsStore.loadItems(l.id)
+        for (const it of itemsStore.getItemsByListId(l.id).value) {
+          allIds.add(it.id)
+        }
       }
+
+      // Los IDs originales siguen presentes...
+      for (const id of originalIds) {
+        expect(allIds.has(id)).toBe(true)
+      }
+
+      // ...y hay al menos tantos IDs nuevos como originales (no se reutilizaron).
+      const newIds = [...allIds].filter((id) => !originalIds.includes(id))
+      expect(newIds.length).toBeGreaterThanOrEqual(originalIds.length)
+    })
+  })
+
+  describe('Category preferences backup (regression for bug 2)', () => {
+    it('should export preferences from IndexedDB, not localStorage', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const preferencesStore = usePreferencesStore()
+      const { exportBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      const item = await itemsStore.createItem(list.id, 'Milk', 'dairy')
+
+      // El usuario mueve Milk de dairy → beverages
+      await preferencesStore.savePreference(item.name, 'beverages')
+
+      const backup = await exportBackup()
+
+      expect(backup.categoryPreferences).toEqual({ milk: 'beverages' })
+    })
+
+    it('should restore preferences into IndexedDB on import', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const preferencesStore = usePreferencesStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const list = await listsStore.createList('Weekly')
+      const item = await itemsStore.createItem(list.id, 'Milk', 'dairy')
+      await preferencesStore.savePreference(item.name, 'beverages')
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await preferencesStore.clearAll()
+
+      await importBackup(backup)
+
+      await preferencesStore.loadPreferences()
+      expect(preferencesStore.getPreferredCategory('Milk')).toBe('beverages')
+    })
+
+    it('should clear preferences on replace, keep them on merge', async () => {
+      const listsStore = useListsStore()
+      const preferencesStore = usePreferencesStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      await listsStore.createList('Weekly')
+      await preferencesStore.savePreference('Milk', 'beverages')
+      const backup = await exportBackup()
+
+      // Añadimos una preferencia que NO está en el backup
+      await preferencesStore.savePreference('Bread', 'bakery')
+
+      // merge: false → la extra debe desaparecer
+      await importBackup(backup, { merge: false })
+      await preferencesStore.loadPreferences()
+      expect(preferencesStore.getPreferredCategory('Milk')).toBe('beverages')
+      expect(preferencesStore.getPreferredCategory('Bread')).toBeNull()
+
+      // merge: true → la extra debe sobrevivir
+      await preferencesStore.savePreference('Bread', 'bakery')
+      await importBackup(backup, { merge: true })
+      await preferencesStore.loadPreferences()
+      expect(preferencesStore.getPreferredCategory('Bread')).toBe('bakery')
     })
   })
 

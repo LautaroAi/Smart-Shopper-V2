@@ -143,10 +143,9 @@ export function useItemsDB() {
   // Importa un item preservando todos sus campos.
   // Genera un id nuevo para evitar colisiones en modo merge.
   const importItem = async (item: ShoppingItem): Promise<ShoppingItem> => {
-    const newItem: ShoppingItem = {
-      ...item,
-      id: uuidv4(),
-    }
+    // Defensa: garantizar objeto plano antes de tocar IndexedDB
+    const plain = JSON.parse(JSON.stringify(item)) as ShoppingItem
+    const newItem: ShoppingItem = { ...plain, id: uuidv4() }
     await db.items.add(newItem)
     return newItem
   }
@@ -155,14 +154,12 @@ export function useItemsDB() {
     await db.items.update(id, updates)
   }
 
-  const toggleComplete = async (id: string): Promise<void> => {
+  const toggleComplete = async (id: string): Promise<ShoppingItem | undefined> => {
     const item = await db.items.get(id)
-    if (!item) return
-
-    await db.items.update(id, {
-      completed: !item.completed,
-      completedAt: !item.completed ? Date.now() : undefined,
-    })
+    if (!item) return undefined
+    const newCompletedAt = !item.completed ? Date.now() : undefined
+    await db.items.update(id, { completed: !item.completed, completedAt: newCompletedAt })
+    return { ...item, completed: !item.completed, completedAt: newCompletedAt }
   }
 
   const remove = async (id: string): Promise<void> => {

@@ -86,16 +86,13 @@ export const useItemsStore = defineStore('items', () => {
     loading.value = true
     error.value = null
     try {
-      await itemsDB.toggleComplete(id)
+      const updated = await itemsDB.toggleComplete(id)
+      if (!updated) return
       const listItems = items.value.get(listId) || []
-      const item = listItems.find((i) => i.id === id)
-      if (item) {
-        item.completed = !item.completed
-        item.completedAt = item.completed ? Date.now() : undefined
-      }
+      const index = listItems.findIndex((i) => i.id === id)
+      if (index >= 0) listItems[index] = updated
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to toggle item'
-      console.error('Failed to toggle item:', e)
       throw e
     } finally {
       loading.value = false
