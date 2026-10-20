@@ -349,6 +349,122 @@ describe('Rule 2.3: Local backup and restore', () => {
     })
   })
 
+  describe('Custom category id remapping (regression for bug 3)', () => {
+    it('should remap custom category ids on items after restore', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const categoriesStore = useCategoriesStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const petsCat = await categoriesStore.createCategory('Pets', '🐾')
+      const list = await listsStore.createList('Weekly')
+      await itemsStore.createItem(list.id, 'Dog Food', petsCat.id)
+
+      const backup = await exportBackup()
+      await listsStore.deleteList(list.id)
+      await categoriesStore.deleteCategory(petsCat.id)
+
+      await importBackup(backup)
+      await listsStore.loadLists()
+      await categoriesStore.loadCustomCategories()
+
+      const restoredListId = listsStore.lists[0]!.id
+      await itemsStore.loadItems(restoredListId)
+      const item = itemsStore.getItemsByListId(restoredListId).value[0]!
+
+      const restoredCat = categoriesStore.customCategories.find((c) => c.name === 'Pets')
+      expect(restoredCat).toBeDefined()
+
+      // El item apunta a la categoría NUEVA, no a la vieja
+      expect(item.category).toBe(restoredCat!.id)
+
+      // Y el display resuelve bien (no cae en Other)
+      expect(categoriesStore.getCategoryDisplay(item.category)).toBe('🐾 Pets')
+    })
+
+    it('should remap custom category ids on products after restore', async () => {
+      const productsStore = useProductsStore()
+      const categoriesStore = useCategoriesStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const petsCat = await categoriesStore.createCategory('Pets', '🐾')
+      await productsStore.saveProduct({
+        barcode: '111',
+        name: 'Dog Food',
+        category: petsCat.id,
+      })
+
+      const backup = await exportBackup()
+      await productsStore.clearProducts()
+      await categoriesStore.deleteCategory(petsCat.id)
+
+      await importBackup(backup)
+      await productsStore.loadProducts()
+      await categoriesStore.loadCustomCategories()
+
+      const restored = productsStore.products.find((p) => p.barcode === '111')!
+      const restoredCat = categoriesStore.customCategories.find((c) => c.name === 'Pets')!
+
+      expect(restored.category).toBe(restoredCat.id)
+    })
+
+    it('should remap category ids inside categoryOrder after restore', async () => {
+      const categoriesStore = useCategoriesStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const petsCat = await categoriesStore.createCategory('Pets', '🐾')
+      categoriesStore.saveCategoryOrder(['produce', petsCat.id, 'dairy'])
+
+      const backup = await exportBackup()
+      await categoriesStore.deleteCategory(petsCat.id)
+      categoriesStore.resetCategoryOrder()
+
+      await importBackup(backup)
+      await categoriesStore.loadCustomCategories()
+
+      const restoredCat = categoriesStore.customCategories.find((c) => c.name === 'Pets')!
+      expect(categoriesStore.categoryOrder).toEqual(['produce', restoredCat.id, 'dairy'])
+    })
+
+    it('should reuse existing custom category by name when merging', async () => {
+      const listsStore = useListsStore()
+      const itemsStore = useItemsStore()
+      const categoriesStore = useCategoriesStore()
+      const { exportBackup, importBackup } = useBackup()
+
+      const originalPets = await categoriesStore.createCategory('Pets', '🐾')
+      const list = await listsStore.createList('Weekly')
+      await itemsStore.createItem(list.id, 'Dog Food', originalPets.id)
+
+      const backup = await exportBackup()
+
+      // El usuario borra la categoría y crea otra "Pets" con ID nuevo
+      await categoriesStore.deleteCategory(originalPets.id)
+      const newPets = await categoriesStore.createCategory('Pets', '🐾')
+      expect(newPets.id).not.toBe(originalPets.id)
+
+      await importBackup(backup, { merge: true })
+      await listsStore.loadLists()
+      await categoriesStore.loadCustomCategories()
+
+      // Sigue habiendo una sola 'Pets'
+      const petsCount = categoriesStore.customCategories.filter((c) => c.name === 'Pets').length
+      expect(petsCount).toBe(1)
+
+      // Recoger TODOS los items de TODAS las listas (merge → 2 'Weekly')
+      const allItems = []
+      for (const l of listsStore.lists) {
+        await itemsStore.loadItems(l.id)
+        allItems.push(...itemsStore.getItemsByListId(l.id).value)
+      }
+
+      // El item importado apunta a la 'Pets' reutilizada (newPets)
+      const importedItems = allItems.filter((i) => i.category === newPets.id)
+      expect(importedItems).toHaveLength(1)
+      expect(importedItems[0]!.name).toBe('Dog Food')
+    })
+  })
+
   describe('Backup validation', () => {
     it('should reject invalid backup data', () => {
       const { validateBackup } = useBackup()
