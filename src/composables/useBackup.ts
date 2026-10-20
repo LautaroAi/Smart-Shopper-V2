@@ -190,17 +190,33 @@ export function useBackup() {
       await preferencesStore.clearAll()
     }
 
-    // Restore custom categories first (they're referenced by items)
+    // ── NUEVO: recargar categorías existentes y construir mapa oldId → newId ──
+    await categoriesStore.loadCustomCategories()
+    const existingByName = new Map(
+      categoriesStore.customCategories.map((c) => [c.name.toLowerCase(), c.id]),
+    )
+    const categoryIdMap = new Map<string, string>()
     for (const category of backupData.customCategories) {
-      await categoriesStore.createCategory(category.name, category.icon || '📦')
+      const key = category.name.toLowerCase()
+      const existingId = existingByName.get(key)
+      if (existingId) {
+        // Ya existe (merge): reutilizamos su ID
+        categoryIdMap.set(category.id, existingId)
+      } else {
+        const created = await categoriesStore.createCategory(category.name, category.icon || '📦')
+        categoryIdMap.set(category.id, created.id)
+        existingByName.set(key, created.id)
+      }
     }
+    // Helper: si no está en el mapa es una categoría default → se deja igual
+    const remapCategory = (id: string): string => categoryIdMap.get(id) ?? id
 
     // Restore products
     for (const product of backupData.products) {
       await productsStore.saveProduct({
         barcode: product.barcode,
         name: product.name,
-        category: product.category,
+        category: remapCategory(product.category),
       })
     }
 
@@ -219,6 +235,7 @@ export function useBackup() {
         await itemsStore.importItem({
           ...JSON.parse(JSON.stringify(item)),
           listId: newList.id, // remapear al nuevo listId
+          category: remapCategory(item.category), // remapear al nuevo listId
         })
       }
     }
@@ -227,14 +244,14 @@ export function useBackup() {
     if (backupData.categoryPreferences) {
       const entries = Object.entries(backupData.categoryPreferences)
       for (const [itemName, category] of entries) {
-        await preferencesStore.savePreference(itemName, category)
+        await preferencesStore.savePreference(itemName, remapCategory(category))
       }
     }
 
     // Restore category order to localStorage
     if (backupData.categoryOrder && backupData.categoryOrder.length > 0) {
       try {
-        categoriesStore.saveCategoryOrder(backupData.categoryOrder)
+        categoriesStore.saveCategoryOrder(backupData.categoryOrder.map(remapCategory))
       } catch (error) {
         console.error('Failed to restore category order:', error)
       }
